@@ -1,0 +1,122 @@
+# LLM Gateway routing configuration.
+#
+# ${VAR} and ${VAR:-default} are expanded from the environment at startup, so secrets
+# stay out of this file. Providers whose API key is empty are disabled and skipped in
+# fallback chains, which is why the gateway runs out of the box with no keys at all
+# (only the `mock` providers are active).
+
+providers:
+  anthropic:
+    type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    base_url: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+    # Claude Sonnet 5 / Opus 5 reject sampling parameters with a 400; strip them.
+    unsupported_params: [temperature, top_p]
+    default_max_tokens: 4096
+    models: [claude-sonnet-5, claude-opus-5, claude-haiku-4-5]
+
+  openai:
+    type: openai
+    api_key: ${OPENAI_API_KEY}
+    base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    models: [gpt-4o, gpt-4o-mini]
+
+  ollama:
+    type: ollama
+    enabled: ${OLLAMA_ENABLED:-false}
+    base_url: ${OLLAMA_BASE_URL:-http://localhost:11434}
+    models: [llama3.1]
+
+  # --- Deterministic, keyless providers for demos, load tests and CI ---------------------
+  mock:
+    type: mock
+    latency_ms: 60
+    jitter_ms: 40
+    models: [mock-large, mock-small]
+
+  # Fails on every call until you change it: demonstrates retries -> circuit breaker ->
+  # failover. Flip it at runtime with PATCH /admin/providers/mock-flaky.
+  mock-flaky:
+    type: mock
+    latency_ms: 30
+    failure_rate: ${MOCK_FLAKY_FAILURE_RATE:-1.0}
+    failure_status: 503
+    models: [mock-large]
+
+  # Partially degraded upstream (30% 503s by default).
+  mock-chaos:
+    type: mock
+    latency_ms: 120
+    jitter_ms: 200
+    failure_rate: ${MOCK_CHAOS_FAILURE_RATE:-0.3}
+    failure_status: 503
+    models: [mock-large]
+
+routes:
+  smart:
+    description: Best available frontier model, failing over across vendors.
+    targets: [anthropic:claude-sonnet-5, openai:gpt-4o, ollama:llama3.1]
+    timeout_s: 60
+    max_retries: 2
+
+  fast:
+    description: Cheap, low-latency model.
+    targets: [anthropic:claude-haiku-4-5, openai:gpt-4o-mini, ollama:llama3.1]
+    timeout_s: 30
+    max_retries: 1
+
+  local:
+    description: Self-hosted only (Ollama).
+    targets: [ollama:llama3.1]
+    timeout_s: 120
+    max_retries: 0
+
+  demo:
+    description: Keyless demo model (mock provider).
+    targets: [mock:mock-large]
+    timeout_s: 10
+    max_retries: 1
+
+  demo-failover:
+    description: Primary always fails; watch retries, the circuit opening, and failover.
+    targets: [mock-flaky:mock-large, mock:mock-large]
+    timeout_s: 10
+    max_retries: 2
+    backoff_base_s: 0.05
+    backoff_max_s: 0.5
+
+  demo-chaos:
+    description: Flaky primary (30% errors) with a healthy fallback.
+    targets: [mock-chaos:mock-large, mock:mock-small]
+    timeout_s: 10
+    max_retries: 1
+    backoff_base_s: 0.05
+    backoff_max_s: 0.5
+
+# Policy for requests that address `provider:model` directly instead of an alias.
+direct_route_defaults:
+  timeout_s: 60
+  max_retries: 1
+
+allow_direct_routing: true
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout_s: 20
+  half_open_max_requests: 1
+  success_threshold: 1
+
+cache:
+  enabled: true
+  ttl_s: 600
+
+# USD per 1M tokens. `provider:model` entries take precedence over bare model ids.
+pricing:
+  claude-opus-5: { input: 5.00, output: 25.00 }
+  claude-sonnet-5: { input: 2.00, output: 10.00 }
+  claude-haiku-4-5: { input: 1.00, output: 5.00 }
+  gpt-4o: { input: 2.50, output: 10.00 }
+  gpt-4o-mini: { input: 0.15, output: 0.60 }
+  llama3.1: { input: 0.00, output: 0.00 }
+  mock-large: { input: 3.00, output: 15.00 }
+  mock-small: { input: 0.50, output: 1.50 }

@@ -1,0 +1,103 @@
+name: llm-gateway
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  gateway:
+    <<: *restart
+    build: .
+    image: llm-gateway:local
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      GATEWAY_REDIS_URL: redis://redis:6379/0
+      GATEWAY_DATABASE_URL: sqlite+aiosqlite:////data/gateway.db
+      GATEWAY_MASTER_KEY: ${GATEWAY_MASTER_KEY:-sk-master-change-me}
+      GATEWAY_OTEL_ENABLED: "true"
+      GATEWAY_OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+    ports:
+      - "${GATEWAY_HOST_PORT:-8080}:8080"
+    volumes:
+      - gateway-data:/data
+      - ./config:/app/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  redis:
+    <<: *restart
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  prometheus:
+    <<: *restart
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - gateway
+
+  grafana:
+    <<: *restart
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/llm-gateway.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+
+  jaeger:
+    <<: *restart
+    image: jaegertracing/jaeger:2.10.0
+    environment:
+      # Jaeger v2 binds its receivers to localhost unless told otherwise.
+      JAEGER_LISTEN_HOST: 0.0.0.0
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+
+  # Optional local models: `docker compose --profile ollama up -d`, then
+  # `docker compose exec ollama ollama pull llama3.1` and set OLLAMA_ENABLED=true.
+  ollama:
+    <<: *restart
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  gateway-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+  ollama-data:
