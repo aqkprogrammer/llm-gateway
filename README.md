@@ -134,6 +134,7 @@ x-gateway-cost-usd: 0.00078000    <- charged to the team's budget
 
 ```python
 from openai import OpenAI
+
 client = OpenAI(base_url="http://localhost:8080/v1", api_key=KEY)  # a gateway virtual key
 client.chat.completions.create(model="demo-failover", messages=[{"role": "user", "content": "Hi"}])
 ```
