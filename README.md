@@ -8,7 +8,7 @@ Point any OpenAI SDK at it by changing `base_url`. Teams get their own virtual A
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-![Grafana dashboard during a chaos load test: traffic, error rate, p95 latency, spend, cache hits and open circuits](docs/screenshots/grafana.png)
+![Tour: the Grafana dashboard during a chaos load test (traffic, error rate, p95 latency, spend, cache hits, open circuits), then a request trace in Jaeger](docs/screenshots/tour.webp)
 
 ---
 
